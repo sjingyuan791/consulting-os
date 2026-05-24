@@ -585,7 +585,8 @@ SECTION_DEFS = [
 
 
 def main():
-    st.set_page_config(page_title="成果物エクスポート", page_icon="📤", layout="wide")
+    st.set_page_config(page_title="成果物エクスポート", page_icon="📤", layout="wide",
+    initial_sidebar_state="expanded")
     if not check_auth():
         st.warning("ログインが必要です")
         return

@@ -42,8 +42,35 @@ def _load_pipeline_steps(client_id: str) -> dict:
         return {}
 
 
+def render_topbar() -> None:
+    """全ページ共通トップナビゲーションバー（サイドバーが見えなくても使える）。"""
+    client_id   = st.session_state.get("client_id")
+    client_name = st.session_state.get("client_name", "")
+
+    if not client_id:
+        return
+
+    col_back, col_ws, col_name = st.columns([1, 1, 6])
+    with col_back:
+        if st.button("← 一覧", key="topbar_home", use_container_width=True):
+            st.session_state.client_id = None
+            st.session_state.client_name = None
+            st.switch_page("app.py")
+    with col_ws:
+        if st.button("🗂 WS", key="topbar_ws", use_container_width=True):
+            st.switch_page("pages/01_project_workspace.py")
+    with col_name:
+        st.markdown(
+            f'<div style="padding:6px 0;font-size:0.85rem;color:#6b7280;">'
+            f'◆ ConsultingOS &nbsp;›&nbsp; <b style="color:#1f2937;">{client_name}</b></div>',
+            unsafe_allow_html=True,
+        )
+    st.divider()
+
+
 def render_sidebar() -> None:
     """全ページ共通サイドバー。"""
+    render_topbar()
     with st.sidebar:
         st.markdown("### ◆ Consulting OS")
         st.divider()

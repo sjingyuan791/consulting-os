@@ -10,7 +10,8 @@ from core.schemas.execution import StrategyDecisionSchema
 from core.schemas.strategy import StrategyOptionItem
 from core.style_utils import load_custom_css
 
-st.set_page_config(page_title="Strategy Decision Workspace", layout="wide")
+st.set_page_config(page_title="Strategy Decision Workspace", layout="wide",
+    initial_sidebar_state="expanded")
 
 def load_latest_strategy_run(client_id):
     sb = get_supabase_client()

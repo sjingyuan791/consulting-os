@@ -4,7 +4,8 @@ from core.supabase_client import get_supabase_client
 from core.execution_monitoring_engine import trigger_monitoring_run
 from core.style_utils import load_custom_css
 
-st.set_page_config(page_title="Execution Dashboard", layout="wide")
+st.set_page_config(page_title="Execution Dashboard", layout="wide",
+    initial_sidebar_state="expanded")
 
 def load_latest_execution_run(client_id):
     sb = get_supabase_client()

@@ -11,7 +11,8 @@ import json
 st.set_page_config(
     page_title="ドキュメント管理 | Consulting OS",
     page_icon="📚",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 from core.sidebar import render_sidebar

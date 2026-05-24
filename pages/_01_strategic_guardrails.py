@@ -6,7 +6,8 @@ from core.schemas.strategy import GuardrailsSchema
 from core.sidebar import render_sidebar
 from core.style_utils import load_custom_css
 
-st.set_page_config(page_title="Strategic Guardrails", layout="wide")
+st.set_page_config(page_title="Strategic Guardrails", layout="wide",
+    initial_sidebar_state="expanded")
 
 def app():
     load_custom_css()

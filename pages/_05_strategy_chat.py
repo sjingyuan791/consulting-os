@@ -119,7 +119,8 @@ def app():
         st.warning("ログインしてください。")
         return
     
-    st.set_page_config(layout="wide")
+    st.set_page_config(layout="wide",
+    initial_sidebar_state="expanded")
 
     client_id = st.session_state.get("client_id")
     if not client_id:

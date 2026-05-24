@@ -209,6 +209,287 @@ def render_file_list_table(dataset_type: str, client_id: str):
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
 
+# ================================================================== #
+#  PDF AI-OCR — 決算書の自動読み取り
+# ================================================================== #
+
+_PL_INPUT_ITEMS = [
+    "売上高", "売上原価",
+    "販売費及び一般管理費",
+    "営業外収益", "営業外費用（支払利息含む）",
+    "特別損益", "法人税等", "減価償却費",
+]
+_PL_DERIVED_ITEMS = ["売上総利益", "営業利益", "経常利益", "当期純利益"]
+
+_BS_INPUT_ITEMS = [
+    "現金預金", "売掛金", "棚卸資産", "その他流動資産",
+    "固定資産合計",
+    "買掛金", "短期借入金", "その他流動負債",
+    "長期借入金", "その他固定負債", "純資産合計",
+]
+_BS_DERIVED_ITEMS = ["流動資産合計", "資産合計", "流動負債合計", "固定負債合計"]
+
+_OCR_SYSTEM_PROMPT = """あなたは日本の中小企業の決算書（損益計算書・貸借対照表）および減価償却明細を読み取る専門AIです。
+提供されたPDFの内容から財務データを正確にJSON形式で抽出してください。
+
+【ルール】
+1. 単位は「百万円」に統一（千円単位 → ÷1000、円単位 → ÷1000000）
+2. 複数年度が含まれる場合は全て抽出
+3. 読み取れない項目はnull
+4. 売上総利益・営業利益・経常利益・当期純利益・各合計はnull可（後で自動計算）
+5. 売掛金には受取手形も含める、買掛金には支払手形も含める
+
+【出力形式】このJSONのみを返すこと:
+{
+  "fiscal_years": [
+    {
+      "年度": "2024",
+      "unit_note": "千円を百万円に変換済み",
+      "pl": {
+        "売上高": null,
+        "売上原価": null,
+        "販売費及び一般管理費": null,
+        "営業外収益": null,
+        "営業外費用（支払利息含む）": null,
+        "特別損益": null,
+        "法人税等": null,
+        "減価償却費": null
+      },
+      "bs": {
+        "現金預金": null,
+        "売掛金": null,
+        "棚卸資産": null,
+        "その他流動資産": null,
+        "固定資産合計": null,
+        "買掛金": null,
+        "短期借入金": null,
+        "その他流動負債": null,
+        "長期借入金": null,
+        "その他固定負債": null,
+        "純資産合計": null
+      },
+      "depreciation_items": [
+        {"資産種類": "建物", "当期償却額": null}
+      ],
+      "confidence": "high",
+      "notes": ""
+    }
+  ]
+}"""
+
+
+def _pdf_to_text_and_images(pdf_file, max_pages: int = 12):
+    """PDF → (抽出テキスト, [base64PNG, ...])"""
+    import io, base64
+    import pypdf
+
+    raw = pdf_file.read()
+
+    # テキスト抽出
+    reader = pypdf.PdfReader(io.BytesIO(raw))
+    text = "\n\n--- page ---\n\n".join(
+        (p.extract_text() or "") for p in reader.pages[:max_pages]
+    ).strip()
+
+    # ページ画像化（PyMuPDF）
+    images: list = []
+    try:
+        import fitz
+        doc = fitz.open(stream=raw, filetype="pdf")
+        mat = fitz.Matrix(1.5, 1.5)
+        for i in range(min(len(doc), max_pages)):
+            pix = doc[i].get_pixmap(matrix=mat)
+            images.append(base64.b64encode(pix.tobytes("png")).decode())
+    except ImportError:
+        pass  # fitz 未インストール時はテキストのみで処理
+
+    return text, images
+
+
+def _call_ocr_api(text: str, images: list, filename: str) -> dict:
+    """GPT-4o Vision で財務データをJSON抽出"""
+    import os
+    from openai import OpenAI
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    content: list = []
+
+    if text and len(text.strip()) > 30:
+        content.append({"type": "text", "text": f"【ファイル: {filename}】\n\n{text[:12000]}"})
+
+    for b64 in images[:8]:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"},
+        })
+
+    if not content:
+        return {"fiscal_years": []}
+
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": _OCR_SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=4096,
+        temperature=0,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+def _compute_pl_bs(pl: dict, bs: dict):
+    """入力項目から派生項目（小計・合計）を計算して返す"""
+    def v(d, k):
+        return float(d.get(k) or 0)
+
+    gross = v(pl, "売上高") - v(pl, "売上原価")
+    op    = gross - v(pl, "販売費及び一般管理費")
+    ordi  = op + v(pl, "営業外収益") - v(pl, "営業外費用（支払利息含む）")
+    net   = ordi + v(pl, "特別損益") - v(pl, "法人税等")
+
+    pl_full = {**pl,
+               "売上総利益": round(gross, 2), "営業利益": round(op, 2),
+               "経常利益": round(ordi, 2), "当期純利益": round(net, 2)}
+
+    ca = v(bs, "現金預金") + v(bs, "売掛金") + v(bs, "棚卸資産") + v(bs, "その他流動資産")
+    ta = ca + v(bs, "固定資産合計")
+    cl = v(bs, "買掛金") + v(bs, "短期借入金") + v(bs, "その他流動負債")
+    fl = v(bs, "長期借入金") + v(bs, "その他固定負債")
+
+    bs_full = {**bs,
+               "流動資産合計": round(ca, 2), "資産合計": round(ta, 2),
+               "流動負債合計": round(cl, 2), "固定負債合計": round(fl, 2)}
+
+    return pl_full, bs_full
+
+
+def _render_ocr_editor(draft: dict, client_id: str, repo):
+    """OCR抽出結果の確認・編集・保存UI"""
+    fiscal_years_raw = draft.get("fiscal_years", [])
+    if not fiscal_years_raw:
+        st.warning("データを自動抽出できませんでした。CSVアップロードか直接入力をお試しください。")
+        return
+
+    fy_map = {str(fy.get("年度", "?")): fy for fy in fiscal_years_raw}
+    years_sorted = sorted(fy_map.keys())
+
+    _conf_icon  = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+    _conf_label = {"high": "高精度", "medium": "中精度（要確認）", "low": "低精度（要修正）"}
+
+    badge_parts = []
+    for y in years_sorted:
+        conf = fy_map[y].get("confidence", "medium")
+        badge_parts.append(f"{_conf_icon.get(conf,'🟡')} **{y}年度** {_conf_label.get(conf,'')}")
+    st.success(f"✅ {len(years_sorted)}年度分を読み取りました: " + " ／ ".join(badge_parts))
+
+    # --- P/L・B/S データフレーム構築 ---
+    pl_input_data, bs_input_data = {}, {}
+    pl_derived_data, bs_derived_data = {}, {}
+
+    for year in years_sorted:
+        fy = fy_map[year]
+        pl_full, bs_full = _compute_pl_bs(fy.get("pl", {}), fy.get("bs", {}))
+        pl_input_data[year]   = {k: float(pl_full.get(k) or 0) for k in _PL_INPUT_ITEMS}
+        pl_derived_data[year] = {k: float(pl_full.get(k) or 0) for k in _PL_DERIVED_ITEMS}
+        bs_input_data[year]   = {k: float(bs_full.get(k) or 0) for k in _BS_INPUT_ITEMS}
+        bs_derived_data[year] = {k: float(bs_full.get(k) or 0) for k in _BS_DERIVED_ITEMS}
+
+    pl_input_df   = pd.DataFrame(pl_input_data)
+    pl_derived_df = pd.DataFrame(pl_derived_data)
+    bs_input_df   = pd.DataFrame(bs_input_data)
+    bs_derived_df = pd.DataFrame(bs_derived_data)
+
+    col_cfg = {
+        yr: st.column_config.NumberColumn(f"{yr}年度", format="%.1f", help="単位: 百万円")
+        for yr in years_sorted
+    }
+
+    # ---- P/L ----
+    st.markdown("#### 📈 損益計算書（P/L） — 単位: 百万円")
+    st.caption("セルをクリックして直接修正できます。グレーの行は自動計算です。")
+    edited_pl = st.data_editor(
+        pl_input_df,
+        column_config=col_cfg,
+        use_container_width=True,
+        num_rows="fixed",
+        key="ocr_pl_editor",
+    )
+    st.markdown("**▼ 自動計算（保存時に確定）**")
+    st.dataframe(pl_derived_df, use_container_width=True)
+
+    st.markdown("---")
+
+    # ---- B/S ----
+    st.markdown("#### 🏦 貸借対照表（B/S） — 単位: 百万円")
+    edited_bs = st.data_editor(
+        bs_input_df,
+        column_config=col_cfg,
+        use_container_width=True,
+        num_rows="fixed",
+        key="ocr_bs_editor",
+    )
+    st.markdown("**▼ 自動計算（保存時に確定）**")
+    st.dataframe(bs_derived_df, use_container_width=True)
+
+    # ---- 減価償却明細 ----
+    dep_rows = []
+    for year in years_sorted:
+        for d in (fy_map[year].get("depreciation_items") or []):
+            if d.get("資産種類") or d.get("当期償却額"):
+                dep_rows.append({"年度": year, **d})
+    if dep_rows:
+        st.markdown("---")
+        st.markdown("#### 🔧 減価償却明細（読み取り値）")
+        st.dataframe(pd.DataFrame(dep_rows), use_container_width=True)
+
+    # ---- AI注記 ----
+    notes = [f"**{y}年度**: {fy_map[y].get('notes','')}"
+             for y in years_sorted if fy_map[y].get("notes")]
+    if notes:
+        st.info("📝 AI読み取り注記\n" + "\n".join(notes))
+
+    st.markdown("---")
+
+    col_save, col_clear = st.columns([3, 1])
+    with col_save:
+        if st.button("💾 この内容で保存", type="primary", use_container_width=True, key="ocr_save"):
+            records = []
+            for year in years_sorted:
+                pl_row = {k: float(edited_pl.at[k, year]) for k in _PL_INPUT_ITEMS}
+                bs_row = {k: float(edited_bs.at[k, year]) for k in _BS_INPUT_ITEMS}
+                pl_full, bs_full = _compute_pl_bs(pl_row, bs_row)
+                record: dict = {"年度": int(year) if str(year).isdigit() else year}
+                record.update(pl_full)
+                for k, val in bs_full.items():
+                    if k not in record:
+                        record[k] = val
+                records.append(record)
+
+            payload = [{
+                "filename": f"AI-OCR読み取り（{len(records)}年度）",
+                "type": "financial_ocr",
+                "records": records,
+                "uploaded_at": pd.Timestamp.now().isoformat(),
+            }]
+            version = repo.save_dataset_version(
+                client_id, "financial", payload,
+                {"filename": f"AI-OCR（{len(records)}年度）",
+                 "quality_score": 85, "source": "ai_ocr"},
+                "ai_ocr",
+                created_by=st.session_state.user.id,
+            )
+            if version:
+                st.success("✅ 財務データを保存しました！")
+                st.session_state.pop("ocr_draft", None)
+                import time; time.sleep(1); st.rerun()
+    with col_clear:
+        if st.button("🗑 やり直す", use_container_width=True, key="ocr_clear"):
+            st.session_state.pop("ocr_draft", None)
+            st.rerun()
+
+
 # ------------------------------------------------------------------ #
 #  メイン
 # ------------------------------------------------------------------ #
@@ -276,13 +557,76 @@ def app():
 
         input_method = st.radio(
             "入力方法",
-            ["📄 CSVアップロード", "✏️ 直接入力（手入力）", "📊 登録データを確認"],
+            ["🤖 PDFから自動取り込み（AI-OCR）", "📄 CSVアップロード", "✏️ 直接入力（手入力）", "📊 登録データを確認"],
             horizontal=True,
         )
         st.divider()
 
+        # ---- PDF AI-OCR ----
+        if input_method == "🤖 PDFから自動取り込み（AI-OCR）":
+            st.info(
+                "決算書・減価償却明細のPDFをアップロードするとAIが自動で数値を読み取ります。\n\n"
+                "弥生会計 / freee / MFクラウド / 税理士作成の決算書PDFに対応。"
+            )
+            col_up, col_info = st.columns([3, 1])
+            with col_up:
+                pdf_files = st.file_uploader(
+                    "PDFをアップロード（複数可・複数年度まとめてOK）",
+                    type=["pdf"],
+                    accept_multiple_files=True,
+                    key="fin_pdf_up",
+                )
+            with col_info:
+                st.markdown("**対応ドキュメント**")
+                st.markdown("- 決算書 / 計算書類")
+                st.markdown("- 損益計算書（P/L）")
+                st.markdown("- 貸借対照表（B/S）")
+                st.markdown("- 減価償却明細書")
+                st.caption("複数年度・複数ファイルをまとめてOK")
+
+            if pdf_files:
+                if st.button("🤖 AI-OCRで自動読み取り開始", type="primary",
+                             use_container_width=True, key="ocr_start"):
+                    with st.spinner("AIが決算書を読み取り中... 約30〜60秒かかります"):
+                        all_fy: dict = {}
+                        errors: list = []
+                        for f in pdf_files:
+                            try:
+                                text, images = _pdf_to_text_and_images(f)
+                                result = _call_ocr_api(text, images, f.name)
+                                for fy in result.get("fiscal_years", []):
+                                    year = str(fy.get("年度", "不明"))
+                                    if year not in all_fy:
+                                        all_fy[year] = fy
+                                    else:
+                                        # 欠損値を他ファイルの値で補完
+                                        for section in ("pl", "bs"):
+                                            ex = all_fy[year].get(section, {})
+                                            nw = fy.get(section, {})
+                                            merged = {
+                                                k: (ex.get(k) if ex.get(k) is not None else nw.get(k))
+                                                for k in set(list(ex.keys()) + list(nw.keys()))
+                                            }
+                                            all_fy[year][section] = merged
+                                        if not all_fy[year].get("depreciation_items"):
+                                            all_fy[year]["depreciation_items"] = fy.get("depreciation_items", [])
+                            except Exception as e:
+                                errors.append(f"❌ {f.name}: {e}")
+
+                        for err in errors:
+                            st.error(err)
+                        if all_fy:
+                            st.session_state["ocr_draft"] = {
+                                "fiscal_years": sorted(all_fy.values(), key=lambda x: str(x.get("年度", "")))
+                            }
+                        elif not errors:
+                            st.error("読み取りに失敗しました。PDFの内容を確認してください。")
+
+            if "ocr_draft" in st.session_state:
+                _render_ocr_editor(st.session_state["ocr_draft"], client_id, repo)
+
         # ---- CSV アップロード ----
-        if input_method == "📄 CSVアップロード":
+        elif input_method == "📄 CSVアップロード":
             col_dl, col_up = st.columns(2, gap="large")
 
             with col_dl:
@@ -384,7 +728,7 @@ def app():
                 render_file_list_table("financial", client_id)
 
         # ---- 直接入力 ----
-        elif input_method == "✏️ 直接入力（手入力）":
+        elif input_method == "✏️ 直接入力（手入力）":  # noqa: E501
             st.info("決算書（P/L・B/S）の数値を直接入力します。CF計算書は不要です。**単位：百万円**")
 
             years = st.multiselect(
@@ -484,7 +828,7 @@ def app():
                     import time; time.sleep(1); st.rerun()
 
         # ---- データ確認 ----
-        elif input_method == "📊 登録データを確認":
+        elif input_method == "📊 登録データを確認":  # noqa: E501
             render_verification_tables(v_fin)
 
     # ===================================================

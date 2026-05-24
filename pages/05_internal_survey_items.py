@@ -824,6 +824,253 @@ def render_step15(session_id: str, client_id: str):
 
 
 # ------------------------------------------------------------------ #
+#  STEP 13: AI内部分析実行
+# ------------------------------------------------------------------ #
+
+def render_step13(session_id: str, client_id: str):
+    st.subheader("STEP 13: 🤖 AI内部分析実行")
+    st.caption("8ドメインの発見事項をAIが総合分析し、強み・弱み・戦略示唆を構造化します。")
+
+    sess = _load_session(session_id)
+    items = _load_items(session_id)
+    existing = sess.get("internal_analysis_result")
+    if isinstance(existing, str):
+        try:
+            existing = json.loads(existing)
+        except Exception:
+            existing = None
+
+    if existing:
+        st.success(f"✅ AI分析済み（発見事項 {len(items)}件を分析）")
+        st.info("再分析する場合は下の「🔄 再分析」ボタンを押してください。")
+        col_re, _ = st.columns([1, 3])
+        with col_re:
+            rerun = st.button("🔄 再分析", type="secondary")
+        if not rerun:
+            st.markdown("---")
+            st.markdown("**→ STEP 14でAI分析結果を確認・レビューしてください。**")
+            if st.button("STEP 14 へ →", type="primary"):
+                st.session_state["int_step"] = 14
+                st.rerun()
+            return
+
+    if not items:
+        st.warning("⚠️ STEP 4-11 で発見事項を登録してから実行してください。")
+        return
+
+    # ドメイン別件数サマリー
+    domain_counts = {}
+    for it in items:
+        d = it.get("domain", "unknown")
+        domain_counts[d] = domain_counts.get(d, 0) + 1
+    st.markdown("**分析対象の発見事項:**")
+    cols = st.columns(4)
+    for i, (d, cnt) in enumerate(domain_counts.items()):
+        cols[i % 4].metric(_DOMAINS.get(d, d), f"{cnt}件")
+
+    st.markdown("---")
+    if st.button("🤖 AI内部分析を実行", type="primary", use_container_width=True):
+        # 発見事項をドメイン別にテキスト化
+        domain_text = ""
+        for domain_key, domain_label in _DOMAINS.items():
+            domain_items = [it for it in items if it.get("domain") == domain_key]
+            if not domain_items:
+                continue
+            domain_text += f"\n### {domain_label}\n"
+            for it in domain_items:
+                cls = _CLASSIFICATIONS.get(it.get("classification", "unclassified"), "未分類")
+                domain_text += (
+                    f"- [{cls}] {it.get('item_name', '')}: {it.get('description', '')}"
+                    f"（根拠: {it.get('evidence', '不明')} / 信頼度: {it.get('confidence', '不明')}）\n"
+                )
+
+        prompt = f"""以下は中小企業の内部環境分析で収集した8ドメインの発見事項です。
+これらを総合分析し、JSON形式で回答してください。
+
+{domain_text}
+
+以下のJSON形式で返してください:
+{{
+  "overall_summary": "内部環境の総括（3〜4文）",
+  "key_strengths": [
+    {{"item": "強みの名称", "description": "根拠と戦略的意義", "domain": "ドメイン名"}}
+  ],
+  "key_weaknesses": [
+    {{"item": "弱みの名称", "description": "根拠と経営への影響", "domain": "ドメイン名"}}
+  ],
+  "unused_assets": [
+    {{"item": "未活用資産名", "description": "活用方針の示唆"}}
+  ],
+  "strategic_constraints": [
+    {{"item": "制約名", "description": "制約の内容と対処方針"}}
+  ],
+  "swot_implications": {{
+    "S": ["SWOTのSに接続すべき発見事項（箇条書き）"],
+    "W": ["SWOTのWに接続すべき発見事項（箇条書き）"]
+  }},
+  "strategic_priorities": [
+    {{"priority": 1, "action": "優先施策", "rationale": "根拠"}}
+  ]
+}}
+
+【ルール】
+1. 必ず具体的な発見事項名を根拠として引用すること
+2. 一般論は書かない
+3. strengths/weaknesses は各最低2件以上
+4. strategic_priorities は3件以上"""
+
+        with st.spinner("AI内部分析中（30〜60秒）..."):
+            try:
+                from openai import OpenAI
+                from core.config import Config
+                from core.llm_client import record_llm_usage
+                client_ai = OpenAI(api_key=Config.OPENAI_API_KEY)
+                completion = client_ai.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "あなたはMcKinsey・BCGレベルの戦略コンサルタントです。中小企業の内部環境分析を行い、具体的数値・事実に基づく発見事項を生成してください。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                    max_tokens=3000,
+                )
+                if completion.usage:
+                    record_llm_usage("internal_analysis", "gpt-4o",
+                                     completion.usage.prompt_tokens,
+                                     completion.usage.completion_tokens)
+                result = json.loads(completion.choices[0].message.content)
+                _update_session(session_id, {
+                    "internal_analysis_result": json.dumps(result, ensure_ascii=False)
+                })
+                st.success(f"✅ AI内部分析完了！STEP 14でレビューしてください。")
+                st.session_state["int_step"] = 14
+                st.rerun()
+            except Exception as e:
+                st.error(f"分析エラー: {type(e).__name__}: {e}")
+
+
+# ------------------------------------------------------------------ #
+#  STEP 14: AI分析結果レビュー
+# ------------------------------------------------------------------ #
+
+def render_step14(session_id: str, client_id: str):
+    st.subheader("STEP 14: ✅ AI分析結果レビュー")
+    st.caption("AI内部分析の結果を確認し、コンサルタントとして修正・承認します。")
+
+    sess = _load_session(session_id)
+    raw = sess.get("internal_analysis_result")
+    if isinstance(raw, str):
+        try:
+            result = json.loads(raw)
+        except Exception:
+            result = None
+    else:
+        result = raw
+
+    if not result:
+        st.warning("⚠️ STEP 13 でAI内部分析を実行してください。")
+        if st.button("← STEP 13 へ"):
+            st.session_state["int_step"] = 13
+            st.rerun()
+        return
+
+    # 総括
+    st.markdown(
+        f'<div style="background:#f0fdf4;border-left:4px solid #16a34a;'
+        f'border-radius:6px;padding:12px 16px;margin-bottom:1rem;">'
+        f'<b>📋 内部環境総括</b><br>{result.get("overall_summary", "")}</div>',
+        unsafe_allow_html=True,
+    )
+
+    tab1, tab2, tab3, tab4 = st.tabs(["💪 強み・弱み", "💎 未活用資産・制約", "⚔️ SWOT接続", "🎯 戦略優先度"])
+
+    with tab1:
+        col_s, col_w = st.columns(2)
+        with col_s:
+            st.markdown("**💪 主要な強み**")
+            for s in result.get("key_strengths", []):
+                st.markdown(
+                    f'<div style="background:#dcfce7;border-radius:6px;padding:8px 12px;margin-bottom:6px;">'
+                    f'<b>{s.get("item","")}</b><br>'
+                    f'<span style="font-size:0.8rem;">{s.get("description","")}</span><br>'
+                    f'<span style="font-size:0.72rem;color:#16a34a;">📍 {s.get("domain","")}</span></div>',
+                    unsafe_allow_html=True,
+                )
+        with col_w:
+            st.markdown("**⚠️ 主要な弱み**")
+            for w in result.get("key_weaknesses", []):
+                st.markdown(
+                    f'<div style="background:#fee2e2;border-radius:6px;padding:8px 12px;margin-bottom:6px;">'
+                    f'<b>{w.get("item","")}</b><br>'
+                    f'<span style="font-size:0.8rem;">{w.get("description","")}</span><br>'
+                    f'<span style="font-size:0.72rem;color:#dc2626;">📍 {w.get("domain","")}</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+    with tab2:
+        col_u, col_c = st.columns(2)
+        with col_u:
+            st.markdown("**💎 未活用資産**")
+            for u in result.get("unused_assets", []):
+                st.markdown(
+                    f'<div style="background:#fef3c7;border-radius:6px;padding:8px 12px;margin-bottom:6px;">'
+                    f'<b>{u.get("item","")}</b><br>'
+                    f'<span style="font-size:0.8rem;">{u.get("description","")}</span></div>',
+                    unsafe_allow_html=True,
+                )
+        with col_c:
+            st.markdown("**🚧 戦略制約**")
+            for c in result.get("strategic_constraints", []):
+                st.markdown(
+                    f'<div style="background:#f3f4f6;border-radius:6px;padding:8px 12px;margin-bottom:6px;">'
+                    f'<b>{c.get("item","")}</b><br>'
+                    f'<span style="font-size:0.8rem;">{c.get("description","")}</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+    with tab3:
+        swot = result.get("swot_implications", {})
+        col_ss, col_ww = st.columns(2)
+        with col_ss:
+            st.markdown("**S（強み）に接続**")
+            for item in swot.get("S", []):
+                st.markdown(f"- {item}")
+        with col_ww:
+            st.markdown("**W（弱み）に接続**")
+            for item in swot.get("W", []):
+                st.markdown(f"- {item}")
+
+    with tab4:
+        st.markdown("**🎯 戦略的優先施策**")
+        for p in result.get("strategic_priorities", []):
+            st.markdown(
+                f'<div style="border:1px solid #e5e7eb;border-radius:8px;'
+                f'padding:10px 14px;margin-bottom:8px;">'
+                f'<b>Priority {p.get("priority","")}: {p.get("action","")}</b><br>'
+                f'<span style="font-size:0.82rem;color:#6b7280;">{p.get("rationale","")}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+    # コンサルタントメモ
+    st.markdown("---")
+    st.markdown("**✏️ コンサルタントメモ（修正・補足）**")
+    memo_key = f"int14_memo_{session_id}"
+    current_memo = sess.get("internal_analysis_memo", "")
+    memo = st.text_area("メモ", value=current_memo, height=100, key=memo_key,
+                         placeholder="AIの分析に対する修正・補足・コンサルタントとしての判断を記入")
+    if memo != current_memo:
+        _update_session(session_id, {"internal_analysis_memo": memo})
+
+    # STEP 15 への接続
+    st.markdown("---")
+    st.success("✅ 内部環境AI分析レビュー完了。STEP 15 でSWOT・パイプラインへ接続します。")
+    if st.button("STEP 15 へ → SWOT・パイプライン接続", type="primary", use_container_width=True):
+        st.session_state["int_step"] = 15
+        st.rerun()
+
+
+# ------------------------------------------------------------------ #
 #  サイドバーナビゲーション
 # ------------------------------------------------------------------ #
 
@@ -929,9 +1176,10 @@ def main():
         render_domain_workspace(session_id, client_id)
     elif step == 12:
         render_step12(session_id)
-    elif step in (13, 14):
-        st.subheader(_STEPS[step])
-        st.info("🚧 このステップは現在実装中です。")
+    elif step == 13:
+        render_step13(session_id, client_id)
+    elif step == 14:
+        render_step14(session_id, client_id)
     elif step == 15:
         render_step15(session_id, client_id)
 

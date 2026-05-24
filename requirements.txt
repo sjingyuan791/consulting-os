@@ -7,7 +7,7 @@ openai-agents
 python-dotenv
 reportlab
 pydantic
-st-aggrid
+streamlit-aggrid
 plotly
 openpyxl
 python-docx

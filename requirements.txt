@@ -1,0 +1,17 @@
+streamlit
+supabase
+pandas
+numpy
+openai
+openai-agents
+python-dotenv
+reportlab
+pydantic
+st-aggrid
+plotly
+openpyxl
+python-docx
+python-pptx
+matplotlib
+tiktoken
+langchain-text-splitters

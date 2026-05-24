@@ -1,0 +1,10 @@
+.venv
+.env
+__pycache__
+*.pyc
+*.pyo
+.git
+artifacts_out
+sample_data
+*.bat
+*.ps1

@@ -1,0 +1,82 @@
+{
+  "overall_score": 85,
+  "grade": "A",
+  "executive_summary": "This is a MOCK evaluation result. The plan is generally sound but lacks specific financial data.",
+  "axis_scores": [
+    {
+      "axis_name": "論理的一貫性",
+      "score": 18,
+      "assessment": "Strong logic flow.",
+      "issues": [],
+      "recommendations": []
+    },
+    {
+      "axis_name": "数値整合性",
+      "score": 15,
+      "assessment": "Some gaps in KPI vs Financials.",
+      "issues": [
+        "KPI targets not fully reflected"
+      ],
+      "recommendations": [
+        "Update Section 13"
+      ]
+    },
+    {
+      "axis_name": "SWOT整合性",
+      "score": 19,
+      "assessment": "Excellent alignment.",
+      "issues": [],
+      "recommendations": []
+    },
+    {
+      "axis_name": "実現可能性",
+      "score": 16,
+      "assessment": "Reasonable given resources.",
+      "issues": [],
+      "recommendations": []
+    },
+    {
+      "axis_name": "欠落・矛盾",
+      "score": 17,
+      "assessment": "No major contradictions.",
+      "issues": [],
+      "recommendations": []
+    }
+  ],
+  "critical_issues": [],
+  "warnings": [
+    {
+      "severity": "warning",
+      "target_section": 13,
+      "target_section_title": "数値計画",
+      "description": "Revenue growth seems optimistic compared to market trends.",
+      "suggestion": "Revisit growth assumptions."
+    }
+  ],
+  "strengths": [
+    "Clear vision",
+    "Strong SWOT analysis"
+  ],
+  "cross_reference_summary": "Good linkage between Section 6 and 8.",
+  "checked_at": "2026-05-22T22:28:55.599778",
+  "pm_decision_audit": {
+    "readiness_score": 60,
+    "status": "数値検証待ち",
+    "next_decision": "戦略をPL/CFで検証する",
+    "next_action": "売上計画、CF計画、3か年数値計画を生成し、DSCRと資金ショートを確認する",
+    "blocking_questions": [
+      "売上計画とキャッシュフローは、悲観シナリオでも資金ショートしないか",
+      "誰が、いつまでに、どのKPIで進捗を判断するか決まっているか"
+    ],
+    "quality_gates": [
+      "財務データの欠損・異常値チェック",
+      "外部環境と内部課題の整合チェック",
+      "戦略仮説とSWOT/真因の因果チェック"
+    ],
+    "differentiation_signals": [
+      "LLMの文章ではなく、データ収集・戦略・数値計画・実行計画を分けて決裁前の不足を明示",
+      "財務シミュレーション、品質ゲート、承認ログにより、なぜその判断に至ったかを追跡可能",
+      "18ステップの進捗を社長向けの論点、未解決リスク、次アクションへ変換"
+    ]
+  }
+}
